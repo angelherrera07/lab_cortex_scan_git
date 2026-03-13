@@ -1,3 +1,108 @@
+name: Cortex DevSecOps Scan
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------
+      # Instalar dependencias
+      # ---------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl jq ca-certificates git unzip
+
+      # ---------------------------------------------------------
+      # Instalar Node (para SCA scan)
+      # ---------------------------------------------------------
+      - name: Install Node.js
+        run: |
+          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          node --version
+          npm --version
+
+      # ---------------------------------------------------------
+      # Instalar Terraform
+      # ---------------------------------------------------------
+      - name: Install Terraform
+        run: |
+          TERRAFORM_VERSION="1.7.5"
+
+          curl -fsSL \
+          "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+          -o terraform.zip
+
+          unzip terraform.zip
+          sudo mv terraform /usr/local/bin/terraform
+
+          terraform --version
+
+      # ---------------------------------------------------------
+      # Descargar Cortex CLI
+      # ---------------------------------------------------------
+      - name: Download Cortex CLI
+        run: |
+          resp=$(curl -s "${{ secrets.CORTEX_API_URL }}/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=amd64" \
+          -H "x-xdr-auth-id: ${{ secrets.CORTEX_API_KEY_ID }}" \
+          -H "Authorization: ${{ secrets.CORTEX_API_KEY }}")
+
+          url=$(echo "$resp" | jq -r ".signed_url")
+
+          curl -L "$url" -o cortexcli
+          chmod +x cortexcli
+          sudo mv cortexcli /usr/local/bin/cortexcli
+
+          cortexcli --version
+
+      # ---------------------------------------------------------
+      # Build Docker Image
+      # ---------------------------------------------------------
+      - name: Build Docker image
+        run: |
+          IMAGE_NAME="myapp:${{ github.run_number }}"
+          docker build -t "$IMAGE_NAME" .
+
+      # ---------------------------------------------------------
+      # Scan Docker Image
+      # ---------------------------------------------------------
+      - name: Cortex Scan Docker Image
+        run: |
+          IMAGE_NAME="myapp:${{ github.run_number }}"
+
+          cortexcli \
+            --api-base-url "${{ secrets.CORTEX_API_URL }}" \
+            --api-key "${{ secrets.CORTEX_API_KEY }}" \
+            --api-key-id "${{ secrets.CORTEX_API_KEY_ID }}" \
+            image scan "$IMAGE_NAME" \
+            --verbose \
+            --upload-mode upload
+
+      # ---------------------------------------------------------
+      # Scan Código + Terraform
+      # ---------------------------------------------------------
+      - name: Cortex Code & IaC Scan
+        run: |
+          cortexcli \
+            --api-base-url "${{ secrets.CORTEX_API_URL }}" \
+            --api-key "${{ secrets.CORTEX_API_KEY }}" \
+            --api-key-id "${{ secrets.CORTEX_API_KEY_ID }}" \
+            code scan \
+            --directory "." \
+            --repo-id angelherrera07/lab_cortex_scan_git \
+            --branch "${{ github.ref_name }}" \
+            --source "GITHUB_ACTIONS" \
+            --create-repo-if-missing
 image: ubuntu:22.04
 
 definitions:
