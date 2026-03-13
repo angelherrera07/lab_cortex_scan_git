@@ -1,0 +1,206 @@
+image: ubuntu:22.04
+
+definitions:
+  services:
+    docker:
+      memory: 2048
+
+  steps:
+
+    # ---------------------------------------------------------
+    # Step 1 - Instalar jq
+    # ---------------------------------------------------------
+    - step: &instalar-jq
+        name: "Verificar/Instalar jq"
+        script:
+          - apt-get update
+          - apt-get install -y jq
+          - jq --version
+
+    # ---------------------------------------------------------
+    # Step 2 - Instalar Node.js y cortexcli
+    # ---------------------------------------------------------
+    - step: &instalar-cortexcli
+        name: "Instalar Node.js v22 y cortexcli"
+        script:
+          - apt-get update
+          - apt-get install -y curl jq ca-certificates git
+
+          - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          - apt-get install -y nodejs
+
+          - node --version
+          - npm --version
+
+          - |
+            set -e
+
+            crtx_resp=$(curl -s "${CORTEX_API_URL}/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=amd64" \
+              -H "x-xdr-auth-id: ${CORTEX_API_KEY_ID}" \
+              -H "Authorization: ${CORTEX_API_KEY}")
+
+            crtx_url=$(echo "$crtx_resp" | jq -r ".signed_url")
+
+            curl -o cortexcli "$crtx_url"
+            chmod +x cortexcli
+            mv cortexcli /usr/local/bin/cortexcli
+
+            cortexcli --version
+
+    # ---------------------------------------------------------
+    # Step 3 - Build Docker Image
+    # ---------------------------------------------------------
+    - step: &build-docker
+        name: "Build Docker Image"
+        services:
+          - docker
+        script:
+          - docker --version
+
+          - |
+            set -e
+            IMAGE_NAME="myapp:${BITBUCKET_BUILD_NUMBER}"
+
+            echo "Construyendo imagen $IMAGE_NAME"
+
+            docker build -t "$IMAGE_NAME" "${BITBUCKET_CLONE_DIR}"
+
+            echo "Imagen creada correctamente"
+
+    # ---------------------------------------------------------
+    # Step 4 - Scan Imagen Docker
+    # ---------------------------------------------------------
+    - step: &cortex-scan-docker
+        name: "Cortex Scan - Imagen Docker"
+        services:
+          - docker
+        script:
+
+          - apt-get update
+          - apt-get install -y curl jq ca-certificates git
+          - apt-get install -y libhyperscan5 || true
+
+          - |
+            set -e
+
+            crtx_resp=$(curl -s "${CORTEX_API_URL}/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=amd64" \
+              -H "x-xdr-auth-id: ${CORTEX_API_KEY_ID}" \
+              -H "Authorization: ${CORTEX_API_KEY}")
+
+            crtx_url=$(echo "$crtx_resp" | jq -r ".signed_url")
+
+            curl -o cortexcli "$crtx_url"
+            chmod +x cortexcli
+            mv cortexcli /usr/local/bin/cortexcli
+
+            cortexcli --version
+
+          - |
+            IMAGE_NAME="myapp:${BITBUCKET_BUILD_NUMBER}"
+
+            docker build -t "$IMAGE_NAME" "${BITBUCKET_CLONE_DIR}"
+
+            docker images
+
+          - |
+            cortexcli \
+              --api-base-url "${CORTEX_API_URL}" \
+              --api-key "${CORTEX_API_KEY}" \
+              --api-key-id "${CORTEX_API_KEY_ID}" \
+              image scan \
+              "myapp:${BITBUCKET_BUILD_NUMBER}" \
+              --verbose || true
+              --upload-mode upload
+
+    # ---------------------------------------------------------
+    # Step 5 - Instalar Terraform
+    # ---------------------------------------------------------
+    - step: &instalar-terraform
+        name: "Instalar Terraform"
+        script:
+          - apt-get update
+          - apt-get install -y curl unzip
+
+          - |
+            TERRAFORM_VERSION="1.7.5"
+
+            curl -fsSL \
+            "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+            -o terraform.zip
+
+            unzip terraform.zip
+            mv terraform /usr/local/bin/terraform
+
+            terraform --version
+
+    # ---------------------------------------------------------
+    # Step 6 - Scan IaC y Código
+    # ---------------------------------------------------------
+    - step: &cortex-scan-iac
+        name: "Cortex Scan - IaC y Código"
+        script:
+
+          - apt-get update
+          - apt-get install -y curl jq ca-certificates git
+
+          # Node necesario para SCA scan
+          - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          - apt-get install -y nodejs
+
+          - node --version
+          - npm --version
+
+          - apt-get install -y libhyperscan5 || true
+
+          - |
+            set -e
+
+            crtx_resp=$(curl -s "${CORTEX_API_URL}/public_api/v1/unified-cli/releases/download-link?os=linux&architecture=amd64" \
+              -H "x-xdr-auth-id: ${CORTEX_API_KEY_ID}" \
+              -H "Authorization: ${CORTEX_API_KEY}")
+
+            crtx_url=$(echo "$crtx_resp" | jq -r ".signed_url")
+
+            curl -o cortexcli "$crtx_url"
+            chmod +x cortexcli
+            mv cortexcli /usr/local/bin/cortexcli
+
+            cortexcli --version
+
+          - |
+            echo "Iniciando Cortex Scan de IaC y código..."
+
+            cortexcli \
+              --api-base-url "${CORTEX_API_URL}" \
+              --api-key "${CORTEX_API_KEY}" \
+              --api-key-id "${CORTEX_API_KEY_ID}" \
+              code scan \
+              --directory "${BITBUCKET_CLONE_DIR}" \
+              --repo-id angelherrera/Cortex-scan/lab_cortex_scan \
+              --branch "${BITBUCKET_BRANCH}" \
+              --source "CORTEX_CLI" \
+              --create-repo-if-missing || true
+
+            echo "Scan finalizado"
+
+            echo "Ver hallazgos en:"
+            echo "Application Security → Issues"
+
+pipelines:
+
+  default:
+    - step: *instalar-jq
+    - step: *instalar-cortexcli
+    - step: *build-docker
+    - step: *cortex-scan-docker
+    - step: *instalar-terraform
+    - step: *cortex-scan-iac
+
+  branches:
+    main:
+      - step: *instalar-jq
+      - step: *instalar-cortexcli
+      - step: *build-docker
+      - step: *cortex-scan-docker
+      - step: *instalar-terraform
+      - step: *cortex-scan-iac 
