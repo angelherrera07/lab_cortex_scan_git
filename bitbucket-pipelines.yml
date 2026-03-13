@@ -176,7 +176,7 @@ definitions:
               --api-key-id "${CORTEX_API_KEY_ID}" \
               code scan \
               --directory "${BITBUCKET_CLONE_DIR}" \
-              --repo-id angelherrera/Cortex-scan/lab_cortex_scan \
+              --repo-id angelherrera07/lab_cortex_scan_git \
               --branch "${BITBUCKET_BRANCH}" \
               --source "CORTEX_CLI" \
               --create-repo-if-missing || true
